@@ -172,7 +172,7 @@
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             if (!db) {
-                alert('資料庫尚未連接，請稍後再試。');
+                showToast('資料庫尚未連接，請稍後再試。', true);
                 return;
             }
             
@@ -180,7 +180,7 @@
             const imageSrc = imagePreview.src;
 
             if (!text || !imageSrc || imageSrc.endsWith(window.location.href)) {
-                alert('請填寫提示詞並上傳一張圖片。');
+                showToast('請填寫提示詞並上傳一張圖片。', true);
                 return;
             }
 
@@ -194,7 +194,7 @@
                 resetForm();
             } catch (error) {
                 console.error("新增資料失敗:", error);
-                alert("儲存失敗，請檢查網路連線。");
+                showToast("儲存失敗，請檢查網路連線。", true);
             }
         });
 
@@ -212,15 +212,14 @@
             }
 
             if (target.closest('.delete-btn')) {
-                if (confirm('確定要刪除這筆收藏嗎？')) {
-                    try {
-                        // 從 Firestore 刪除資料
-                        const docRef = doc(db, promptsCollectionRef.path, promptId);
-                        await deleteDoc(docRef);
-                    } catch (error) {
-                        console.error("刪除資料失敗:", error);
-                        alert("刪除失敗，請檢查網路連線。");
-                    }
+                try {
+                    // 從 Firestore 刪除資料
+                    const docRef = doc(db, promptsCollectionRef.path, promptId);
+                    await deleteDoc(docRef);
+                    showToast('收藏已刪除。');
+                } catch (error) {
+                    console.error("刪除資料失敗:", error);
+                    showToast("刪除失敗，請檢查網路連線。", true);
                 }
             }
         });
