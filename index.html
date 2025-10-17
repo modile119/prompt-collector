@@ -3,34 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 提示詞靈感收集庫</title>
+    <title>AI 提示詞靈感收集庫 (雲端版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- 引入 Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, query, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        window.firebase = { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, 
+            getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, query, orderBy
+        };
+    </script>
     <style>
         body {
             font-family: 'Noto Sans TC', sans-serif;
         }
-        /* 當滾動條出現時，為其添加一些邊距，避免內容緊貼邊緣 */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
-        .card-image {
-            aspect-ratio: 1 / 1;
-            object-fit: cover;
-        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        .card-image { aspect-ratio: 1 / 1; object-fit: cover; }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
@@ -39,8 +36,8 @@
 
         <!-- Header -->
         <header class="text-center mb-8">
-            <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">AI 提示詞靈感收集庫 🎨</h1>
-            <p class="mt-2 text-gray-600">輕鬆收藏、管理您的 Midjourney, Stable Diffusion 提示詞！</p>
+            <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">AI 提示詞靈感收集庫 🎨 (雲端版)</h1>
+            <p class="mt-2 text-gray-600">您的資料已自動同步至雲端！</p>
         </header>
 
         <!-- Form Section -->
@@ -62,7 +59,7 @@
                             <i class="fas fa-cloud-upload-alt text-4xl mb-2"></i>
                             <p>點擊、拖曳或貼上圖片</p>
                         </div>
-                        <input type="file" id="prompt-image" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required>
+                        <input type="file" id="prompt-image" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                     </div>
                 </div>
 
@@ -79,7 +76,8 @@
         <div>
             <h2 class="text-2xl font-bold mb-4 border-b pb-3">我的收藏庫</h2>
             <div id="gallery" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                <!-- Prompt cards will be injected here by JavaScript -->
+                 <!-- Loading placeholder -->
+                <p id="loading-message" class="col-span-full text-center text-gray-500 py-10">正在從雲端載入資料...</p>
             </div>
              <p id="empty-message" class="text-center text-gray-500 py-10 hidden">您的收藏庫是空的，快去新增第一筆靈感吧！</p>
         </div>
@@ -90,8 +88,14 @@
         <p>提示詞已複製！</p>
     </div>
 
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
+<script type="module">
+    // 使用延遲加載確保 Firebase SDK 已載入
+    const { 
+        initializeApp, getAuth, signInAnonymously, signInWithCustomToken, 
+        getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, query, orderBy
+    } = window.firebase;
+
+    document.addEventListener('DOMContentLoaded', async () => {
         // DOM Elements
         const form = document.getElementById('prompt-form');
         const promptText = document.getElementById('prompt-text');
@@ -100,56 +104,77 @@
         const uploadPlaceholder = document.getElementById('upload-placeholder');
         const gallery = document.getElementById('gallery');
         const emptyMessage = document.getElementById('empty-message');
+        const loadingMessage = document.getElementById('loading-message');
         const toast = document.getElementById('toast');
         const imageDropZone = document.getElementById('image-drop-zone');
 
-        // Load prompts from localStorage
-        let prompts = JSON.parse(localStorage.getItem('aiPrompts')) || [];
+        // --- Firebase Setup ---
+        // 這些變數會由執行環境自動提供
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId, promptsCollectionRef;
+        let prompts = []; // 用於儲存從 Firestore 來的資料
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+
+            // 登入以取得 User ID
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                await signInAnonymously(auth);
+            }
+            userId = auth.currentUser.uid;
+
+            // 設定資料庫路徑
+            const collectionPath = `/artifacts/${appId}/users/${userId}/prompts`;
+            promptsCollectionRef = collection(db, collectionPath);
+            
+            // 監聽雲端資料庫的即時變化
+            const q = query(promptsCollectionRef, orderBy('createdAt', 'desc'));
+            onSnapshot(q, (querySnapshot) => {
+                loadingMessage.classList.add('hidden');
+                prompts = [];
+                querySnapshot.forEach((doc) => {
+                    prompts.push({ ...doc.data(), id: doc.id });
+                });
+                renderGallery();
+            });
+
+        } catch (error) {
+            console.error("Firebase 初始化或資料讀取失敗:", error);
+            loadingMessage.textContent = '無法連接到雲端資料庫。';
+        }
 
         // --- Event Listeners ---
 
-        // Image Preview Handler (from file selection)
         promptImageInput.addEventListener('change', (event) => {
             const file = event.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    imagePreview.src = e.target.result;
-                    imagePreview.classList.remove('hidden');
-                    uploadPlaceholder.classList.add('hidden');
-                };
-                reader.readAsDataURL(file);
-            }
+            if (file) handleFile(file);
         });
 
-        // Add Paste from Clipboard functionality
         imageDropZone.addEventListener('paste', (event) => {
             const items = event.clipboardData?.items;
             if (!items) return;
-
-            let imageFile = null;
             for (const item of items) {
                 if (item.kind === 'file' && item.type.startsWith('image/')) {
-                    imageFile = item.getAsFile();
-                    break;
+                    event.preventDefault();
+                    handleFile(item.getAsFile());
+                    return;
                 }
-            }
-
-            if (imageFile) {
-                event.preventDefault();
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    imagePreview.src = e.target.result;
-                    imagePreview.classList.remove('hidden');
-                    uploadPlaceholder.classList.add('hidden');
-                };
-                reader.readAsDataURL(imageFile);
             }
         });
 
-        // Form Submission Handler
-        form.addEventListener('submit', (event) => {
+        form.addEventListener('submit', async (event) => {
             event.preventDefault();
+            if (!db) {
+                alert('資料庫尚未連接，請稍後再試。');
+                return;
+            }
             
             const text = promptText.value;
             const imageSrc = imagePreview.src;
@@ -159,59 +184,57 @@
                 return;
             }
 
-            const newPrompt = {
-                id: Date.now(),
-                text: text,
-                image: imageSrc
-            };
-
-            prompts.unshift(newPrompt); // Add to the beginning of the array
-            saveAndRender();
-            resetForm();
+            try {
+                // 將新資料存到 Firestore
+                await addDoc(promptsCollectionRef, {
+                    text: text,
+                    image: imageSrc,
+                    createdAt: new Date()
+                });
+                resetForm();
+            } catch (error) {
+                console.error("新增資料失敗:", error);
+                alert("儲存失敗，請檢查網路連線。");
+            }
         });
 
-        // Gallery Click Handler (for copy and delete)
-        gallery.addEventListener('click', (event) => {
+        gallery.addEventListener('click', async (event) => {
+            if (!db) return;
             const target = event.target;
             const card = target.closest('.prompt-card');
             if (!card) return;
 
-            const promptId = Number(card.dataset.id);
+            const promptId = card.dataset.id; // Firestore ID is a string
 
-            // Copy button
             if (target.closest('.copy-btn')) {
                 const textToCopy = prompts.find(p => p.id === promptId)?.text;
-                if (textToCopy) {
-                    // Use document.execCommand for better iframe compatibility
-                    const textarea = document.createElement('textarea');
-                    textarea.value = textToCopy;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    try {
-                        document.execCommand('copy');
-                        showToast('提示詞已複製！');
-                    } catch (err) {
-                        console.error('Fallback: Oops, unable to copy', err);
-                        showToast('複製失敗', true);
-                    }
-                    document.body.removeChild(textarea);
-                }
+                if (textToCopy) copyToClipboard(textToCopy);
             }
 
-            // Delete button
             if (target.closest('.delete-btn')) {
                 if (confirm('確定要刪除這筆收藏嗎？')) {
-                    prompts = prompts.filter(p => p.id !== promptId);
-                    saveAndRender();
+                    try {
+                        // 從 Firestore 刪除資料
+                        const docRef = doc(db, promptsCollectionRef.path, promptId);
+                        await deleteDoc(docRef);
+                    } catch (error) {
+                        console.error("刪除資料失敗:", error);
+                        alert("刪除失敗，請檢查網路連線。");
+                    }
                 }
             }
         });
         
         // --- Functions ---
-
-        function saveAndRender() {
-            localStorage.setItem('aiPrompts', JSON.stringify(prompts));
-            renderGallery();
+        
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imagePreview.src = e.target.result;
+                imagePreview.classList.remove('hidden');
+                uploadPlaceholder.classList.add('hidden');
+            };
+            reader.readAsDataURL(file);
         }
 
         function renderGallery() {
@@ -242,12 +265,28 @@
                 });
             }
         }
+        
+        function copyToClipboard(text) {
+             const textarea = document.createElement('textarea');
+             textarea.value = text;
+             document.body.appendChild(textarea);
+             textarea.select();
+             try {
+                 document.execCommand('copy');
+                 showToast('提示詞已複製！');
+             } catch (err) {
+                 console.error('Fallback: Oops, unable to copy', err);
+                 showToast('複製失敗', true);
+             }
+             document.body.removeChild(textarea);
+        }
 
         function resetForm() {
             form.reset();
             imagePreview.src = '';
             imagePreview.classList.add('hidden');
             uploadPlaceholder.classList.remove('hidden');
+            promptImageInput.value = ''; // 確保 file input 也被重置
         }
 
         function showToast(message, isError = false) {
@@ -264,9 +303,6 @@
             p.appendChild(document.createTextNode(str));
             return p.innerHTML;
         }
-
-        // Initial render
-        renderGallery();
     });
 </script>
 
